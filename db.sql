@@ -68,9 +68,9 @@ CREATE INDEX idx_sub_org ON subscriptions(organization_id);
 
 CREATE TABLE files (
                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                       owner_user_id UUID NOT NULL REFERENCES users(id),
+                       user_id UUID NOT NULL REFERENCES users(id),
                        organization_id UUID REFERENCES organizations(id),
-                       name VARCHAR(255) NOT NULL,
+                       filename VARCHAR(255) NOT NULL,
                        current_version_id UUID,
                        is_deleted BOOLEAN DEFAULT false,
                        created_at TIMESTAMP DEFAULT NOW(),
@@ -142,3 +142,17 @@ CREATE INDEX idx_audit_file ON audit_logs(file_id);
 ALTER TABLE organizations
     ADD CONSTRAINT fk_org_plan
         FOREIGN KEY (plan_id) REFERENCES plans(id);
+
+
+ALTER TABLE files
+    ADD CONSTRAINT fk_files_current_version
+        FOREIGN KEY (current_version_id) REFERENCES file_versions(id);
+
+ALTER TABLE file_versions
+    ADD CONSTRAINT fk_file_versions_physical
+        FOREIGN KEY (physical_file_id) REFERENCES physical_files(id);
+
+CREATE INDEX idx_files_owner ON files(owner_user_id);
+
+CREATE INDEX idx_files_owner ON files(user_id);
+
