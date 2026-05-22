@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ type Storage interface {
 	SaveTemp(src io.Reader, originalName string) (tempPath string, size int64, hash string, err error)
 	Finalize(tempPath, hash string) (finalPath string, err error)
 	Delete(path string) error
+	SaveCompressed(reader io.Reader, ext string) (string, int64, error)
 }
 
 type LocalStorage struct {
@@ -71,4 +73,32 @@ func (s *LocalStorage) Finalize(tempPath, hash string) (string, error) {
 
 func (s *LocalStorage) Delete(path string) error {
 	return os.Remove(path)
+}
+
+// ✅ Правильный receiver: *LocalStorage
+func (s *LocalStorage) SaveCompressed(
+	reader io.Reader,
+	ext string,
+) (string, int64, error) {
+
+	// ✅ Создаём директорию, если не существует
+	if err := os.MkdirAll(s.BaseDir, 0o755); err != nil { // ✅ было: s.basePath
+		return "", 0, err
+	}
+
+	filename := uuid.New().String() + ext
+	fullPath := filepath.Join(s.BaseDir, filename) // ✅ было: s.basePath
+
+	dst, err := os.Create(fullPath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer dst.Close()
+
+	size, err := io.Copy(dst, reader)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return fullPath, size, nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"diplom/internal/auth"
+	"diplom/internal/compression"
 	"diplom/internal/database"
 	"diplom/internal/files"
 	"diplom/internal/middleware"
@@ -34,6 +35,7 @@ func main() {
 	authRepo := auth.NewRepository(db)
 	authService := auth.NewService(authRepo)
 	authHandler := auth.NewHandler(authService)
+	compressionManager := compression.NewManager()
 
 	// =========================
 	// FILES MODULE (NEW ARCH)
@@ -43,7 +45,7 @@ func main() {
 	// storage теперь часть service abstraction
 	storage := files.NewLocalStorage("./uploads")
 
-	filesService := files.NewService(filesRepo, storage)
+	filesService := files.NewService(filesRepo, storage, compressionManager)
 	filesHandler := files.NewHandler(filesService)
 
 	// =========================
@@ -77,6 +79,8 @@ func main() {
 			filesGroup.GET("/", filesHandler.List)
 			filesGroup.GET("/:id/download", filesHandler.Download)
 			filesGroup.DELETE("/:id", filesHandler.Delete)
+			filesGroup.GET("/:id/versions", filesHandler.GetVersionHistory)
+			filesGroup.POST("/:id/restore/:version", filesHandler.RestoreVersion)
 		}
 	}
 

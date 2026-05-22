@@ -1,19 +1,30 @@
 package files
 
 import (
+	"bytes"
 	"context"
+	"diplom/internal/compression"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 type Service struct {
-	repo    *Repository
-	storage Storage
+	repo        *Repository
+	storage     Storage
+	compression *compression.Manager
 }
 
-func NewService(repo *Repository, storage Storage) *Service {
+func NewService(
+	repo *Repository,
+	storage Storage,
+	compressionManager *compression.Manager,
+) *Service {
 	return &Service{
-		repo:    repo,
-		storage: storage,
+		repo:        repo,
+		storage:     storage,
+		compression: compressionManager,
 	}
 }
 
@@ -24,101 +35,210 @@ func ptrString(v string) *string {
 	return &v
 }
 
-func (s *Service) Upload(ctx context.Context, userID, organizationID, filename string, src io.Reader) (*File, error) {
-	tempPath, originalSize, hash, err := s.storage.SaveTemp(src, filename)
+func (s *Service) Upload(
+	ctx context.Context,
+	userID string,
+	filename string,
+	file io.Reader,
+) (*File, error) {
+
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
+
+	hash := CalculateSHA256(data)
 
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
-		_ = s.storage.Delete(tempPath)
-		return nil, err
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	var physical *PhysicalFile
-	physical, err = s.repo.FindPhysicalByHash(ctx, tx, hash)
-
-	newPhysical := false
-	if err != nil && err != ErrNotFound {
-		_ = s.storage.Delete(tempPath)
 		return nil, err
 	}
 
-	if physical == nil {
-		finalPath, err := s.storage.Finalize(tempPath, hash)
+	defer tx.Rollback(ctx)
+
+	existingPhysical, err := s.repo.FindPhysicalByHash(
+		ctx,
+		tx,
+		hash,
+	)
+
+	var physicalID string
+
+	// DUPLICATE
+	if err == nil {
+
+		err = s.repo.IncrementPhysicalReference(
+			ctx,
+			tx,
+			existingPhysical.ID,
+		)
+
 		if err != nil {
-			_ = s.storage.Delete(tempPath)
 			return nil, err
 		}
 
-		physical = &PhysicalFile{
-			HashSHA256:     hash,
-			StoragePath:    finalPath,
-			OriginalSize:   originalSize,
-			ReferenceCount: 1,
-		}
+		physicalID = existingPhysical.ID
 
-		if err := s.repo.CreatePhysical(ctx, tx, physical); err != nil {
-			_ = s.storage.Delete(finalPath)
-			return nil, err
-		}
-		newPhysical = true
 	} else {
-		if err := s.repo.IncrementPhysicalReference(ctx, tx, physical.ID); err != nil {
-			_ = s.storage.Delete(tempPath)
+
+		compressor, compressedData, err := s.compression.SelectBest(data)
+		if err != nil {
 			return nil, err
 		}
-		_ = s.storage.Delete(tempPath)
-	}
 
-	file := &File{
-		UserID:         userID,
-		OrganizationID: ptrString(organizationID),
-		Filename:       filename,
-		IsDeleted:      false,
-	}
+		originalSize := int64(len(data))
+		compressedSize := int64(len(compressedData))
 
-	if err := s.repo.CreateFile(ctx, tx, file); err != nil {
-		if newPhysical {
-			_ = s.storage.Delete(physical.StoragePath)
+		var (
+			path              string
+			algorithm         *string
+			compressedSizePtr *int64
+			ratio             *float64
+		)
+
+		// 🔍 Проверяем: если сжатие не выгодно — сохраняем оригинал
+		if compressedSize >= originalSize {
+			// Сохраняем исходные данные без сжатия
+			path, _, err = s.storage.SaveCompressed( // ← _ вместо finalSize
+				bytes.NewReader(data),
+				filepath.Ext(filename),
+			)
+			// Поля сжатия остаются nil
+		} else {
+			// Сжатие выгодно — сохраняем сжатые данные
+			path, _, err = s.storage.SaveCompressed( // ← _ вместо finalSize
+				bytes.NewReader(compressedData),
+				filepath.Ext(filename),
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			alg := compressor.Name()
+			algorithm = &alg
+			compressedSizePtr = &compressedSize
+			r := float64(compressedSize) / float64(originalSize)
+			ratio = &r
 		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		physical := &PhysicalFile{
+			HashSHA256:           hash,
+			StoragePath:          path,
+			OriginalSize:         originalSize,
+			CompressedSize:       compressedSizePtr, // nil если не сжимали
+			CompressionAlgorithm: algorithm,         // nil если не сжимали
+			CompressionRatio:     ratio,             // nil если не сжимали
+			ReferenceCount:       1,
+		}
+		err = s.repo.CreatePhysical(
+			ctx,
+			tx,
+			physical,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		physicalID = physical.ID
+	}
+
+	existingFile, err := s.repo.FindByUserAndFilename(
+		ctx,
+		tx,
+		userID,
+		filename,
+	)
+
+	var logicalFile *File
+	var versionNumber int
+
+	if err == nil {
+
+		// FILE EXISTS -> NEW VERSION
+
+		logicalFile = existingFile
+
+		latestVersion, err :=
+			s.repo.GetLatestVersionNumber(
+				ctx,
+				tx,
+				logicalFile.ID,
+			)
+
+		if err != nil {
+			return nil, err
+		}
+
+		versionNumber = latestVersion + 1
+
+	} else {
+
+		// NEW FILE
+
+		logicalFile = &File{
+			UserID:    userID,
+			Filename:  filename,
+			IsDeleted: false,
+		}
+
+		err = s.repo.CreateFile(
+			ctx,
+			tx,
+			logicalFile,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		versionNumber = 1
+	}
+
+	if err != nil {
 		return nil, err
 	}
 
 	version := &FileVersion{
-		FileID:         file.ID,
-		PhysicalFileID: physical.ID,
-		VersionNumber:  1,
-		UploadedBy:     ptrString(userID),
+		FileID:         logicalFile.ID,
+		PhysicalFileID: physicalID,
+		VersionNumber:  versionNumber,
+		UploadedBy:     userID,
 	}
 
-	if err := s.repo.CreateFileVersion(ctx, tx, version); err != nil {
-		if newPhysical {
-			_ = s.storage.Delete(physical.StoragePath)
-		}
+	err = s.repo.CreateFileVersion(
+		ctx,
+		tx,
+		version,
+	)
+
+	if err != nil {
 		return nil, err
 	}
 
-	if err := s.repo.SetCurrentVersion(ctx, tx, file.ID, version.ID); err != nil {
-		if newPhysical {
-			_ = s.storage.Delete(physical.StoragePath)
-		}
+	err = s.repo.SetCurrentVersion(
+		ctx,
+		tx,
+		logicalFile.ID,
+		version.ID,
+	)
+
+	if err != nil {
 		return nil, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		if newPhysical {
-			_ = s.storage.Delete(physical.StoragePath)
-		}
+	err = tx.Commit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	file.CurrentVersionID = &version.ID
-	return file, nil
+	logicalFile.CurrentVersionID = &version.ID
+
+	return logicalFile, nil
 }
 
 func (s *Service) List(ctx context.Context, userID string) ([]FileListItem, error) {
@@ -159,6 +279,109 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		if err := s.storage.Delete(physical.StoragePath); err != nil {
 			return err
 		}
+	}
+
+	return tx.Commit(ctx)
+}
+func (s *Service) Download(
+	ctx context.Context,
+	fileID string,
+) (io.ReadCloser, string, error) {
+
+	file, err := s.repo.GetByIDWithPhysical(
+		ctx,
+		fileID,
+	)
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	src, err := os.Open(file.StoragePath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// файл не сжат
+	if file.CompressionAlgorithm == nil {
+		return src, file.Filename, nil
+	}
+
+	compressor :=
+		s.compression.GetByName(
+			*file.CompressionAlgorithm,
+		)
+
+	if compressor == nil {
+		src.Close()
+		return nil, "", errors.New("compressor not found")
+	}
+
+	pr, pw := io.Pipe()
+
+	go func() {
+
+		defer pw.Close()
+		defer src.Close()
+
+		err := compressor.Decompress(
+			src,
+			pw,
+		)
+
+		if err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+
+	return pr, file.Filename, nil
+}
+
+func (s *Service) GetVersionHistory(
+	ctx context.Context,
+	fileID string,
+) ([]FileVersionInfo, error) {
+
+	return s.repo.GetVersionsByFileID(
+		ctx,
+		fileID,
+	)
+}
+func (s *Service) RestoreVersion(
+	ctx context.Context,
+	fileID string,
+	versionNumber int,
+) error {
+
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	version, err := s.repo.GetVersionByNumber(
+		ctx,
+		tx,
+		fileID,
+		versionNumber,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	err = s.repo.SetCurrentVersion(
+		ctx,
+		tx,
+		fileID,
+		version.ID,
+	)
+
+	if err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

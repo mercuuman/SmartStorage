@@ -1,8 +1,11 @@
 package files
 
 import (
+	"errors"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,32 +19,43 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) Upload(c *gin.Context) {
+
 	userID := c.GetString("userID")
-	orgID := c.GetString("organizationID")
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "file is required",
+		})
 		return
 	}
 
 	src, err := fileHeader.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open file"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to open file",
+		})
 		return
 	}
+
 	defer src.Close()
 
-	file, err := h.service.Upload(c.Request.Context(), userID, orgID, fileHeader.Filename, src)
+	file, err := h.service.Upload(
+		c.Request.Context(),
+		userID,
+		fileHeader.Filename,
+		src,
+	)
+
 	if err != nil {
-		log.Printf("upload failed: userID=%s filename=%s err=%v", userID, fileHeader.Filename, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusCreated, file)
 }
-
 func (h *Handler) List(c *gin.Context) {
 	userID := c.GetString("userID")
 
@@ -55,15 +69,48 @@ func (h *Handler) List(c *gin.Context) {
 }
 
 func (h *Handler) Download(c *gin.Context) {
+
 	id := c.Param("id")
 
-	file, err := h.service.GetDownloadFile(c.Request.Context(), id)
+	reader, filename, err :=
+		h.service.Download(
+			c.Request.Context(),
+			id,
+		)
+
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		if errors.Is(err, ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "file not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	c.FileAttachment(file.StoragePath, file.Filename)
+	defer reader.Close()
+
+	c.Header(
+		"Content-Disposition",
+		`attachment; filename="`+filename+`"`,
+	)
+
+	c.Header(
+		"Content-Type",
+		"application/octet-stream",
+	)
+
+	_, err = io.Copy(
+		c.Writer,
+		reader,
+	)
+
+	if err != nil {
+		return
+	}
 }
 
 func (h *Handler) Delete(c *gin.Context) {
@@ -75,4 +122,70 @@ func (h *Handler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "file deleted"})
+}
+
+func (h *Handler) GetVersionHistory(c *gin.Context) {
+
+	fileID := c.Param("id")
+
+	versions, err := h.service.GetVersionHistory(
+		c.Request.Context(),
+		fileID,
+	)
+
+	if err != nil {
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+
+		return
+	}
+
+	c.JSON(http.StatusOK, versions)
+}
+func (h *Handler) RestoreVersion(c *gin.Context) {
+
+	fileID := c.Param("id")
+
+	versionNumber, err := strconv.Atoi(
+		c.Param("version"),
+	)
+
+	if err != nil {
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid version",
+		})
+
+		return
+	}
+
+	err = h.service.RestoreVersion(
+		c.Request.Context(),
+		fileID,
+		versionNumber,
+	)
+
+	if err != nil {
+
+		if errors.Is(err, ErrNotFound) {
+
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "version not found",
+			})
+
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "version restored",
+	})
 }

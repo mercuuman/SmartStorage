@@ -18,7 +18,7 @@ type FileVersion struct {
 	FileID         string    `json:"file_id"`
 	PhysicalFileID string    `json:"physical_file_id"`
 	VersionNumber  int       `json:"version_number"`
-	UploadedBy     *string   `json:"uploaded_by,omitempty"`
+	UploadedBy     string    `json:"uploaded_by,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -46,7 +46,23 @@ type FileListItem struct {
 }
 
 type DownloadFile struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	StoragePath string `json:"storage_path"`
+	ID                   string  `json:"id"`
+	Filename             string  `json:"filename"`
+	StoragePath          string  `json:"storage_path"`
+	CompressionAlgorithm *string `json:"compression_algorithm"`
+}
+type FileVersionInfo struct {
+	ID            string    `json:"id"`
+	VersionNumber int       `json:"version_number"`
+	CreatedAt     time.Time `json:"created_at"`
+
+	PhysicalFileID string `json:"physical_file_id"`
+
+	OriginalSize int64 `json:"original_size"`
+
+	CompressedSize *int64 `json:"compressed_size"`
+
+	CompressionAlgorithm *string `json:"compression_algorithm"`
+
+	CompressionRatio *float64 `json:"compression_ratio"`
 }
