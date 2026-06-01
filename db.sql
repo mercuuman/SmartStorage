@@ -156,3 +156,15 @@ CREATE INDEX idx_files_owner ON files(owner_user_id);
 
 CREATE INDEX idx_files_owner ON files(user_id);
 
+create table folders
+(
+    id          uuid default uuid_generate_v4() primary key,
+    user_id     uuid not null references users,
+    parent_id   uuid references folders on delete cascade,
+    name        varchar(255) not null,
+    created_at  timestamp default now()
+);
+alter table files
+    add column folder_id uuid references folders;
+
+ALTER TABLE folders ADD COLUMN is_system BOOLEAN DEFAULT FALSE;

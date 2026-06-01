@@ -386,3 +386,16 @@ func (s *Service) RestoreVersion(
 
 	return tx.Commit(ctx)
 }
+
+// Service: GetFileDetails — получает полную информацию о файле
+func (s *Service) GetFileDetails(ctx context.Context, fileID string) (*FileDetails, error) {
+	details, err := s.repo.GetFileWithDetails(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Опционально: скрываем чувствительные данные
+	// details.PhysicalFile.StoragePath = "" // если не хотите отдавать путь
+
+	return details, nil
+}

@@ -577,3 +577,128 @@ func (r *Repository) GetVersionByNumber(
 
 	return &v, nil
 }
+
+// Repository: GetFileWithDetails - получает файл со всей связанной информацией
+func (r *Repository) GetFileWithDetails(
+	ctx context.Context,
+	fileID string,
+) (*FileDetails, error) {
+	query := `
+		SELECT
+			-- Logical file fields
+			f.id,
+			f.user_id,
+			f.organization_id,
+			f.filename,
+			f.current_version_id,
+			f.is_deleted,
+			f.created_at,
+			f.updated_at,
+			-- Current version fields
+			fv.id as version_id,
+			fv.version_number,
+			fv.uploaded_by,
+			fv.created_at as version_created_at,
+			-- Physical file fields
+			pf.id as physical_id,
+			pf.hash_sha256,
+			pf.storage_path,
+			pf.original_size,
+			pf.compressed_size,
+			pf.compression_algorithm,
+			pf.compression_ratio,
+			pf.reference_count,
+			pf.created_at as physical_created_at
+		FROM files f
+		LEFT JOIN file_versions fv 
+			ON fv.id = f.current_version_id
+		LEFT JOIN physical_files pf 
+			ON pf.id = fv.physical_file_id
+		WHERE f.id = $1
+		  AND f.is_deleted = false
+	`
+
+	var details FileDetails
+	var orgID, currentVersionID, versionID, uploadedBy, physicalID sql.NullString
+	var compressedSize sql.NullInt64
+	var compressionAlg sql.NullString
+	var compressionRatio sql.NullFloat64
+	var versionCreatedAt, physicalCreatedAt sql.NullTime
+
+	err := r.db.QueryRow(ctx, query, fileID).Scan(
+		&details.File.ID,
+		&details.File.UserID,
+		&orgID,
+		&details.File.Filename,
+		&currentVersionID,
+		&details.File.IsDeleted,
+		&details.File.CreatedAt,
+		&details.File.UpdatedAt,
+		&versionID,
+		&details.CurrentVersion.Number,
+		&uploadedBy,
+		&versionCreatedAt,
+		&physicalID,
+		&details.PhysicalFile.HashSHA256,
+		&details.PhysicalFile.StoragePath,
+		&details.PhysicalFile.OriginalSize,
+		&compressedSize,
+		&compressionAlg,
+		&compressionRatio,
+		&details.PhysicalFile.ReferenceCount,
+		&physicalCreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	// Заполняем опциональные поля логического файла
+	if orgID.Valid {
+		v := orgID.String
+		details.File.OrganizationID = &v
+	}
+	if currentVersionID.Valid {
+		v := currentVersionID.String
+		details.File.CurrentVersionID = &v
+	}
+
+	// Заполняем данные версии (если есть)
+	if versionID.Valid {
+		details.CurrentVersion.ID = versionID.String
+		details.CurrentVersion.HasData = true
+		if uploadedBy.Valid {
+			v := uploadedBy.String
+			details.CurrentVersion.UploadedBy = v
+		}
+		if versionCreatedAt.Valid {
+			details.CurrentVersion.CreatedAt = versionCreatedAt.Time
+		}
+	}
+
+	// Заполняем данные физического файла (если есть)
+	if physicalID.Valid {
+		details.PhysicalFile.ID = physicalID.String
+		details.PhysicalFile.HasData = true
+
+		if compressedSize.Valid {
+			v := compressedSize.Int64
+			details.PhysicalFile.CompressedSize = &v
+		}
+		if compressionAlg.Valid {
+			v := compressionAlg.String
+			details.PhysicalFile.CompressionAlgorithm = &v
+		}
+		if compressionRatio.Valid {
+			v := compressionRatio.Float64
+			details.PhysicalFile.CompressionRatio = &v
+		}
+		if physicalCreatedAt.Valid {
+			details.PhysicalFile.CreatedAt = physicalCreatedAt.Time
+		}
+	}
+
+	return &details, nil
+}

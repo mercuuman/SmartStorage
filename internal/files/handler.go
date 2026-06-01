@@ -189,3 +189,22 @@ func (h *Handler) RestoreVersion(c *gin.Context) {
 		"message": "version restored",
 	})
 }
+func (h *Handler) GetFileDetails(c *gin.Context) {
+	fileID := c.Param("id")
+	userID := c.GetString("userID")
+	details, err := h.service.GetFileDetails(c.Request.Context(), fileID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		log.Printf("get file details failed: id=%s err=%v", fileID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get file details"})
+		return
+	}
+	if details.File.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+	c.JSON(http.StatusOK, details)
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"diplom/internal/analytics"
 	"diplom/internal/auth"
 	"diplom/internal/compression"
 	"diplom/internal/database"
@@ -8,7 +9,9 @@ import (
 	"diplom/internal/middleware"
 	"log"
 	"os"
+	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -29,6 +32,16 @@ func main() {
 	// 3. Router
 	r := gin.Default()
 
+	// CORS
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
+
 	// =========================
 	// AUTH MODULE
 	// =========================
@@ -47,6 +60,11 @@ func main() {
 
 	filesService := files.NewService(filesRepo, storage, compressionManager)
 	filesHandler := files.NewHandler(filesService)
+
+	// ANALYTICS MODULE
+	analyticsRepo := analytics.NewRepository(db)
+	analyticsService := analytics.NewService(analyticsRepo)
+	analyticsHandler := analytics.NewHandler(analyticsService)
 
 	// =========================
 	// API ROUTES
@@ -79,8 +97,15 @@ func main() {
 			filesGroup.GET("/", filesHandler.List)
 			filesGroup.GET("/:id/download", filesHandler.Download)
 			filesGroup.DELETE("/:id", filesHandler.Delete)
+			filesGroup.GET("/:id", filesHandler.GetFileDetails)
 			filesGroup.GET("/:id/versions", filesHandler.GetVersionHistory)
 			filesGroup.POST("/:id/restore/:version", filesHandler.RestoreVersion)
+		}
+		analytics := protected.Group("/analytics")
+		{
+			analytics.GET("/system", analyticsHandler.GetSystemStats)
+			analytics.GET("/user", analyticsHandler.GetUserStats)
+			analytics.GET("/compression", analyticsHandler.GetCompressionStats)
 		}
 	}
 
