@@ -168,3 +168,21 @@ alter table files
     add column folder_id uuid references folders;
 
 ALTER TABLE folders ADD COLUMN is_system BOOLEAN DEFAULT FALSE;
+
+
+-- 003_add_folders.sql
+CREATE TABLE IF NOT EXISTS folders (
+                                       id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                                       user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                       parent_id   UUID REFERENCES folders(id) ON DELETE CASCADE,
+                                       name        VARCHAR(255) NOT NULL,
+                                       is_system   BOOLEAN DEFAULT FALSE,
+                                       created_at  TIMESTAMP DEFAULT NOW(),
+                                       UNIQUE(user_id, parent_id, name)
+);
+CREATE INDEX idx_folders_user_parent ON folders(user_id, parent_id);
+CREATE INDEX idx_folders_parent ON folders(parent_id);
+
+-- 004_add_folder_id_to_files.sql
+ALTER TABLE files ADD COLUMN IF NOT EXISTS folder_id UUID REFERENCES folders(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_files_user_folder ON files(user_id, folder_id);

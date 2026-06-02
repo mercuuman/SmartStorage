@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 
 	"golang.org/x/crypto/bcrypt"
@@ -53,4 +54,7 @@ func (s *Service) Login(req LoginRequest) (string, error) {
 	}
 
 	return token, nil
+}
+func (s *Service) GetUser(ctx context.Context, id string) (*User, error) {
+	return s.repo.GetUserByID(ctx, id)
 }

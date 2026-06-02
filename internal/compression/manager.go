@@ -2,6 +2,8 @@ package compression
 
 import (
 	"bytes"
+	"errors"
+	"io"
 )
 
 type Manager struct {
@@ -60,4 +62,22 @@ func (m *Manager) GetByName(name string) Compressor {
 	}
 
 	return nil
+}
+
+// SelectBestForStream сжимает данные из reader в writer (streaming)
+// Возвращает выбранный компрессор
+func (m *Manager) SelectBestForStream(src io.Reader, dst io.Writer) (Compressor, error) {
+	// Используем первый доступный компрессор (или можно тестировать все)
+	if len(m.compressors) == 0 {
+		return nil, errors.New("no compressors available")
+	}
+
+	compressor := m.compressors[0] // Возьми первый компрессор
+
+	// Сжимаем потоково
+	if err := compressor.Compress(src, dst); err != nil {
+		return nil, err
+	}
+
+	return compressor, nil
 }

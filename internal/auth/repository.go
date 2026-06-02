@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -56,4 +59,26 @@ func (r *Repository) GetUserByEmail(email string) (*User, error) {
 	}
 
 	return &user, nil
+}
+func (r *Repository) GetUserByID(ctx context.Context, id string) (*User, error) {
+	query := `
+		SELECT id, email, password_hash, name, status, created_at, updated_at
+		FROM users
+		WHERE id = $1
+	`
+	var u User
+	var name sql.NullString
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &name, &u.Status, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+	if name.Valid {
+		u.Name = &name.String
+	}
+	return &u, nil
 }
