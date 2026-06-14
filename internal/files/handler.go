@@ -258,3 +258,57 @@ func (h *Handler) RestoreFromTrash(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "restored from trash"})
 }
+
+// MoveFile — перемещение файла в другую папку
+func (h *Handler) MoveFile(c *gin.Context) {
+	userID := c.GetString("userID")
+	fileID := c.Param("id")
+
+	var req struct {
+		FolderID *string `json:"folder_id"` // null = корень
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	if err := h.service.MoveFile(c.Request.Context(), userID, fileID, req.FolderID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		if err.Error() == "access denied" {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "file moved"})
+}
+
+// MoveFolder — перемещение папки в другую папку
+func (h *Handler) MoveFolder(c *gin.Context) {
+	userID := c.GetString("userID")
+	folderID := c.Param("id")
+
+	var req struct {
+		ParentID *string `json:"parent_id"` // null = корень
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	if err := h.service.MoveFolder(c.Request.Context(), userID, folderID, req.ParentID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "folder not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "folder moved"})
+}

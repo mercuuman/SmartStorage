@@ -42,10 +42,9 @@ func (s *Service) Upload(ctx context.Context, userID, filename string, file io.R
 	tmpPath := tmpFile.Name()
 	defer func() {
 		tmpFile.Close()
-		os.Remove(tmpPath) // Удаляем временный файл после обработки
+		os.Remove(tmpPath)
 	}()
 
-	// 🔥 Хешируем и пишем во временный файл одновременно (streaming)
 	hasher := sha256.New()
 	teeReader := io.TeeReader(file, hasher)
 
@@ -156,7 +155,6 @@ func (s *Service) Upload(ctx context.Context, userID, filename string, file io.R
 	return logicalFile, nil
 }
 
-// 🔥 Новая функция: сжатие из файла в файл (streaming)
 func (s *Service) compressAndSave(srcFile *os.File, filename string, originalSize int64) (string, *string, int64, *float64, error) {
 	// Перематываем в начало
 	if _, err := srcFile.Seek(0, 0); err != nil {
@@ -431,6 +429,96 @@ func (s *Service) RestoreFromTrash(ctx context.Context, userID string, fileID, f
 		_, err = tx.Exec(ctx, `UPDATE folders SET parent_id = $1 WHERE id = $2 AND user_id = $3 AND parent_id = $4`, targetParentID, *folderID, userID, trashID)
 	}
 	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// MoveFile перемещает файл в указанную папку (или в корень, если folderID = nil)
+func (s *Service) MoveFile(ctx context.Context, userID, fileID string, folderID *string) error {
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Проверяем, что файл принадлежит пользователю
+	file, err := s.repo.GetFileByID(ctx, tx, fileID)
+	if err != nil {
+		return err
+	}
+	if file.UserID != userID {
+		return errors.New("access denied")
+	}
+
+	// Если целевая папка указана — проверяем, что она принадлежит пользователю
+	if folderID != nil {
+		folder, err := s.repo.GetFolderByID(ctx, tx, *folderID)
+		if err != nil {
+			return err
+		}
+		if folder.UserID != userID {
+			return errors.New("access denied")
+		}
+		if folder.IsSystem {
+			return errors.New("cannot move to system folder")
+		}
+	}
+
+	if err := s.repo.MoveFileToFolder(ctx, tx, fileID, folderID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// MoveFolder перемещает папку в другую папку
+func (s *Service) MoveFolder(ctx context.Context, userID, folderID string, parentID *string) error {
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	folder, err := s.repo.GetFolderByID(ctx, tx, folderID)
+	if err != nil {
+		return err
+	}
+	if folder.UserID != userID {
+		return errors.New("access denied")
+	}
+	if folder.IsSystem {
+		return errors.New("cannot move system folder")
+	}
+
+	// Нельзя переместить папку саму в себя
+	if parentID != nil && *parentID == folderID {
+		return errors.New("cannot move folder into itself")
+	}
+
+	// Проверка на циклическую ссылку: нельзя переместить папку в её же потомка
+	if parentID != nil {
+		if isDescendant, err := s.repo.IsDescendantOf(ctx, tx, *parentID, folderID); err != nil {
+			return err
+		} else if isDescendant {
+			return errors.New("cannot move folder into its descendant")
+		}
+	}
+
+	// Если целевая папка указана — проверяем права
+	if parentID != nil {
+		target, err := s.repo.GetFolderByID(ctx, tx, *parentID)
+		if err != nil {
+			return err
+		}
+		if target.UserID != userID {
+			return errors.New("access denied")
+		}
+		if target.IsSystem {
+			return errors.New("cannot move to system folder")
+		}
+	}
+
+	if err := s.repo.MoveFolderToParent(ctx, tx, folderID, parentID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

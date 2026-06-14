@@ -610,3 +610,58 @@ func scanFileListItems(rows pgx.Rows) ([]FileListItem, error) {
 	}
 	return items, rows.Err()
 }
+
+// GetFileByID получает файл по ID
+func (r *Repository) GetFileByID(ctx context.Context, tx pgx.Tx, id string) (*File, error) {
+	query := `SELECT id, user_id, organization_id, filename, folder_id, current_version_id, is_deleted, created_at, updated_at FROM files WHERE id = $1`
+	row := r.queryRow(ctx, tx, query, id)
+
+	var f File
+	var orgID, folderID, curVerID sql.NullString
+	err := row.Scan(&f.ID, &f.UserID, &orgID, &f.Filename, &folderID, &curVerID, &f.IsDeleted, &f.CreatedAt, &f.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if orgID.Valid {
+		f.OrganizationID = &orgID.String
+	}
+	if folderID.Valid {
+		f.FolderID = &folderID.String
+	}
+	if curVerID.Valid {
+		f.CurrentVersionID = &curVerID.String
+	}
+	return &f, nil
+}
+
+// MoveFileToFolder обновляет folder_id у файла
+func (r *Repository) MoveFileToFolder(ctx context.Context, tx pgx.Tx, fileID string, folderID *string) error {
+	_, err := r.exec(ctx, tx, `UPDATE files SET folder_id = $1, updated_at = NOW() WHERE id = $2`, folderID, fileID)
+	return err
+}
+
+// MoveFolderToParent обновляет parent_id у папки
+func (r *Repository) MoveFolderToParent(ctx context.Context, tx pgx.Tx, folderID string, parentID *string) error {
+	_, err := r.exec(ctx, tx, `UPDATE folders SET parent_id = $1 WHERE id = $2`, parentID, folderID)
+	return err
+}
+
+// IsDescendantOf проверяет, является ли potentialDescendant потомком ancestorID
+func (r *Repository) IsDescendantOf(ctx context.Context, tx pgx.Tx, potentialDescendant, ancestorID string) (bool, error) {
+	// Рекурсивный запрос: идём вверх от potentialDescendant, ищем ancestorID
+	query := `
+        WITH RECURSIVE ancestors AS (
+            SELECT id, parent_id FROM folders WHERE id = $1
+            UNION ALL
+            SELECT f.id, f.parent_id FROM folders f
+            INNER JOIN ancestors a ON f.id = a.parent_id
+        )
+        SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = $2)
+    `
+	var exists bool
+	err := r.queryRow(ctx, tx, query, potentialDescendant, ancestorID).Scan(&exists)
+	return exists, err
+}

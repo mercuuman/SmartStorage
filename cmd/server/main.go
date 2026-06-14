@@ -81,6 +81,9 @@ func main() {
 			filesGroup.GET("/:id", filesHandler.GetFileDetails)
 			filesGroup.GET("/:id/versions", filesHandler.GetVersionHistory)
 			filesGroup.POST("/:id/restore/:version", filesHandler.RestoreVersion)
+			// Внутри filesGroup:
+			filesGroup.PATCH("/:id/move", filesHandler.MoveFile)
+
 		}
 
 		// FOLDERS
@@ -90,6 +93,8 @@ func main() {
 			foldersGroup.GET("/", filesHandler.ListFolders)
 			foldersGroup.GET("/:id", filesHandler.GetFolder)
 			foldersGroup.DELETE("/:id", filesHandler.DeleteFolder) // → в Корзину
+			// Внутри foldersGroup:
+			foldersGroup.PATCH("/:id/move", filesHandler.MoveFolder)
 		}
 
 		// TRASH
